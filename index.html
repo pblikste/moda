@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MoDa Air Pollution Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Nunito', system-ui, sans-serif; }
+    :root { --moda-yellow: #FFE400; }
+
+    .metric-btn { color: #9ca3af; transition: all .15s; }
+    .metric-btn.active { background: var(--moda-yellow); color: #111; }
+    .range-btn  { color: #9ca3af; transition: all .15s; }
+    .range-btn.active  { background: #374151; color: #fff; }
+    .view-btn   { color: #9ca3af; transition: all .15s; }
+    .view-btn.active   { background: #6366f1; color: #fff; }
+
+    .loc-card { transition: border-color .2s, transform .15s; }
+    .loc-card:hover { border-color: var(--moda-yellow); transform: translateY(-1px); }
+
+    .spinner {
+      width: 22px; height: 22px;
+      border: 3px solid #374151;
+      border-top-color: var(--moda-yellow);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .moda-btn { background: var(--moda-yellow); color: #111; font-weight: 700; transition: filter .15s; }
+    .moda-btn:hover { filter: brightness(1.08); }
+
+    /* Correlation matrix */
+    .corr-th { width: 44px; padding: 0 2px 4px; vertical-align: bottom; text-align: center; }
+    .corr-label { writing-mode: vertical-rl; transform: rotate(180deg);
+      font-size: 10px; font-weight: 700; color: #9ca3af; line-height: 1; }
+    .corr-row-label { font-size: 10px; font-weight: 700; color: #9ca3af;
+      text-align: right; padding-right: 6px; white-space: nowrap; vertical-align: middle; }
+    .corr-cell { width: 44px; height: 44px; text-align: center; vertical-align: middle;
+      font-size: 10px; font-weight: 800; border: 1px solid #111827; cursor: default;
+      transition: filter .1s; }
+    .corr-cell:hover { filter: brightness(1.2); }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+<!-- Token Modal -->
+<div id="tokenModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+  <div class="bg-gray-900 border border-gray-700 rounded-2xl p-8 w-full max-w-md shadow-2xl mx-4">
+    <div class="bg-white rounded-xl p-4 flex justify-center mb-6">
+      <img src="MoDa_Logo_White.png" style="height:52px;" alt="MoDa">
+    </div>
+    <h2 class="text-lg font-bold text-center mb-1">Air Pollution Monitor</h2>
+    <p class="text-gray-400 text-sm text-center mb-6">
+      Enter your AirGradient API token from<br>
+      <span class="text-gray-300">General Settings → Connectivity</span>
+    </p>
+    <input id="tokenInput" type="text" placeholder="API token"
+      class="w-full bg-gray-800 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-500 mb-4 outline-none focus:ring-2 focus:ring-yellow-400 focus:border-transparent"
+      onkeydown="if(event.key==='Enter') saveToken()">
+    <div id="tokenError" class="hidden text-red-400 text-sm mb-3"></div>
+    <div class="flex gap-3">
+      <button onclick="saveToken()" class="moda-btn flex-1 py-3 rounded-xl text-sm">Connect</button>
+      <button id="cancelTokenBtn" onclick="closeTokenModal()"
+        class="hidden px-6 py-3 bg-gray-700 hover:bg-gray-600 rounded-xl transition text-sm font-semibold">
+        Cancel
+      </button>
+    </div>
+    <p class="text-gray-600 text-xs mt-4 text-center">Token stored only in your browser's localStorage.</p>
+  </div>
+</div>
+
+<!-- Nav -->
+<nav class="bg-gray-900 border-b border-gray-800">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+    <!-- Logo + title -->
+    <div class="flex items-center gap-3">
+      <div class="bg-white rounded-xl px-3 py-1.5 flex-shrink-0">
+        <img src="MoDa_Logo_White.png" style="height:30px;" alt="MoDa">
+      </div>
+      <div>
+        <p class="text-sm font-extrabold text-white leading-none">Air Pollution Monitor</p>
+        <p id="placeName" class="text-xs text-gray-400 mt-0.5"></p>
+      </div>
+    </div>
+    <!-- Controls -->
+    <div class="flex items-center gap-2">
+      <span id="lastUpdate" class="hidden text-xs text-gray-600"></span>
+      <button onclick="refreshData()"
+        class="flex items-center gap-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">
+        ↻ Refresh
+      </button>
+      <button onclick="showTokenModal()"
+        class="bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition">
+        ⚙ Token
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- Title bar -->
+<div class="bg-gray-900 border-b border-gray-800/50 px-6 py-5">
+  <div class="max-w-7xl mx-auto">
+    <h1 class="text-2xl font-extrabold text-white">MoDa Air Pollution Monitor</h1>
+    <p class="text-gray-400 text-sm mt-0.5">Real-time and historical air quality data from AirGradient sensors</p>
+  </div>
+</div>
+
+<!-- Main -->
+<main class="max-w-7xl mx-auto p-6 space-y-8">
+
+  <div id="errorBanner" class="hidden bg-red-950 border border-red-800 text-red-300 px-4 py-3 rounded-xl text-sm"></div>
+
+  <!-- Current Readings -->
+  <section>
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-base font-bold text-gray-200 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-green-400 inline-block animate-pulse"></span>
+        Current Readings
+      </h2>
+      <div id="loadingSpinner" class="hidden spinner"></div>
+    </div>
+    <div id="locationGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div class="col-span-full text-center py-12 text-gray-600 text-sm">Connecting…</div>
+    </div>
+  </section>
+
+  <!-- Historical Chart -->
+  <section class="bg-gray-900 border border-gray-800 rounded-2xl p-6">
+    <h2 class="text-base font-bold text-gray-200 mb-5">Historical Data</h2>
+
+    <!-- Controls -->
+    <div class="flex flex-wrap gap-3 mb-5">
+
+      <select id="chartLocation"
+        class="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-yellow-400 min-w-44 font-semibold">
+        <option value="">Select location…</option>
+      </select>
+
+      <!-- Metric -->
+      <div class="flex flex-wrap gap-0.5 bg-gray-800 border border-gray-700 rounded-xl p-1">
+        <button onclick="setMetric('pm02')"       data-metric="pm02"       class="metric-btn active px-3 py-1 rounded-lg text-xs font-bold">PM2.5</button>
+        <button onclick="setMetric('pm01')"       data-metric="pm01"       class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">PM1.0</button>
+        <button onclick="setMetric('pm10')"       data-metric="pm10"       class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">PM10</button>
+        <button onclick="setMetric('rco2')"       data-metric="rco2"       class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">CO₂</button>
+        <button onclick="setMetric('atmp')"       data-metric="atmp"       class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">Temp</button>
+        <button onclick="setMetric('rhum')"       data-metric="rhum"       class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">Humidity</button>
+        <button onclick="setMetric('tvocIndex')"  data-metric="tvocIndex"  class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">TVOC</button>
+        <button onclick="setMetric('noxIndex')"   data-metric="noxIndex"   class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">NOx</button>
+        <button onclick="setMetric('pm003Count')" data-metric="pm003Count" class="metric-btn px-3 py-1 rounded-lg text-xs font-bold">Particles</button>
+      </div>
+
+      <!-- View mode (all metrics) -->
+      <div class="flex gap-0.5 bg-gray-800 border border-gray-700 rounded-xl p-1">
+        <button onclick="setViewMode('standard')"   data-view="standard"   class="view-btn active px-3 py-1 rounded-lg text-xs font-bold">Standard</button>
+        <button onclick="setViewMode('hourly')"     data-view="hourly"     class="view-btn px-3 py-1 rounded-lg text-xs font-bold">≈ Hourly</button>
+        <button onclick="setViewMode('dayOverlay')" data-view="dayOverlay" class="view-btn px-3 py-1 rounded-lg text-xs font-bold">Day Overlay</button>
+      </div>
+
+      <!-- Range -->
+      <div class="flex gap-0.5 bg-gray-800 border border-gray-700 rounded-xl p-1">
+        <button onclick="setRange(1)"  data-range="1"  class="range-btn px-3 py-1 rounded-lg text-xs font-bold">24h</button>
+        <button onclick="setRange(3)"  data-range="3"  class="range-btn px-3 py-1 rounded-lg text-xs font-bold">3d</button>
+        <button onclick="setRange(7)"  data-range="7"  class="range-btn active px-3 py-1 rounded-lg text-xs font-bold">7d</button>
+        <button onclick="setRange(30)" data-range="30" class="range-btn px-3 py-1 rounded-lg text-xs font-bold">30d</button>
+      </div>
+
+      <button onclick="loadChart()" class="moda-btn px-5 py-2 rounded-xl text-sm">Load</button>
+    </div>
+
+    <!-- Stats -->
+    <div id="chartStats" class="hidden flex items-center gap-6 mb-4 text-sm text-gray-400">
+      <span>Min: <strong id="statMin" class="text-white font-bold"></strong></span>
+      <span>Max: <strong id="statMax" class="text-white font-bold"></strong></span>
+      <span>Avg: <strong id="statAvg" class="text-white font-bold"></strong></span>
+      <span id="statCount" class="text-gray-600 text-xs"></span>
+    </div>
+
+    <!-- Chart + Correlation Matrix -->
+    <div class="flex gap-6 items-start">
+
+      <!-- Line chart -->
+      <div class="flex-1 min-w-0 relative" style="height:340px;">
+        <canvas id="historyChart"></canvas>
+        <div id="chartPlaceholder" class="absolute inset-0 flex flex-col items-center justify-center text-gray-600 text-sm gap-3">
+          <svg class="w-12 h-12 text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
+              d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+          </svg>
+          Select a location above and click Load
+        </div>
+      </div>
+
+      <!-- Correlation matrix panel -->
+      <div id="corrPanel" class="hidden flex-shrink-0" style="width:265px;">
+        <p class="text-xs font-bold text-gray-400 mb-1">Correlation Matrix <span class="font-normal text-gray-600">(Pearson r)</span></p>
+        <div class="overflow-x-auto">
+          <table id="corrTable" class="border-collapse"></table>
+        </div>
+        <!-- Color scale legend -->
+        <div class="flex items-center gap-2 mt-3">
+          <span class="text-xs text-gray-600">−1</span>
+          <div class="flex-1 h-2.5 rounded" style="background:linear-gradient(to right,#1d4ed8,#374151,#b91c1c)"></div>
+          <span class="text-xs text-gray-600">+1</span>
+        </div>
+        <div class="flex justify-between text-xs text-gray-600 mt-0.5 px-0.5">
+          <span>negative</span><span>positive</span>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <footer class="border-t border-gray-800 pt-6 pb-4 flex flex-wrap items-center justify-between gap-4 text-xs text-gray-600">
+    <span>MoDa Air Pollution Monitor · Powered by <a href="https://www.airgradient.com" target="_blank" class="hover:text-gray-400 transition">AirGradient</a></span>
+    <span>© <a href="https://moda.education" target="_blank" class="hover:text-gray-400 transition">moda.education</a></span>
+  </footer>
+
+</main>
+
+<script>
+const API_BASE = 'https://api.airgradient.com/public/api/v1';
+let chart         = null;
+let locations     = [];
+let currentRecords = null;
+let selectedMetric = 'pm02';
+let selectedRange  = 7;
+let viewMode       = 'standard';
+let autoRefreshTimer = null;
+
+const DAY_PALETTE = [
+  '#FFE400','#4ade80','#60a5fa','#f97316','#a78bfa',
+  '#fb7185','#22d3ee','#fbbf24','#34d399','#f472b6',
+  '#818cf8','#84cc16','#e879f9','#2dd4bf',
+];
+
+// ── API ────────────────────────────────────────────────────────────────────
+async function api(path, params = {}) {
+  const token = localStorage.getItem('ag_token');
+  const url   = new URL(API_BASE + path);
+  if (token) url.searchParams.set('token', token);
+  Object.entries(params).forEach(([k,v]) => {
+    if (v !== undefined && v !== null) url.searchParams.set(k, v);
+  });
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    const body = await res.text().catch(()=>'');
+    throw new Error(`HTTP ${res.status}${body ? ': '+body.slice(0,120) : ''}`);
+  }
+  return res.json();
+}
+
+// ── Token ──────────────────────────────────────────────────────────────────
+function saveToken() {
+  const t = document.getElementById('tokenInput').value.trim();
+  if (!t) {
+    document.getElementById('tokenError').textContent = 'Please enter a token.';
+    document.getElementById('tokenError').classList.remove('hidden');
+    return;
+  }
+  localStorage.setItem('ag_token', t);
+  document.getElementById('tokenModal').classList.add('hidden');
+  document.getElementById('tokenError').classList.add('hidden');
+  init();
+}
+function showTokenModal() {
+  const t = localStorage.getItem('ag_token') || '';
+  document.getElementById('tokenInput').value = t;
+  document.getElementById('tokenError').classList.add('hidden');
+  document.getElementById('cancelTokenBtn').classList.toggle('hidden', !t);
+  document.getElementById('tokenModal').classList.remove('hidden');
+  setTimeout(() => document.getElementById('tokenInput').focus(), 50);
+}
+function closeTokenModal() {
+  if (!localStorage.getItem('ag_token')) return;
+  document.getElementById('tokenModal').classList.add('hidden');
+}
+document.addEventListener('keydown', e => { if (e.key==='Escape') closeTokenModal(); });
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  if (!localStorage.getItem('ag_token')) { showTokenModal(); return; }
+  api('/place').then(p => {
+    const name = p.name || p.displayName || '';
+    if (name) document.getElementById('placeName').textContent = name;
+  }).catch(()=>{});
+  await refreshData();
+  startAutoRefresh();
+}
+function startAutoRefresh() {
+  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(refreshData, 5*60*1000);
+}
+
+// ── Current readings ───────────────────────────────────────────────────────
+async function refreshData() {
+  hideError();
+  document.getElementById('loadingSpinner').classList.remove('hidden');
+  try {
+    const raw = await api('/locations/measures/current');
+    locations = normalizeArray(raw);
+    renderCards(locations);
+    populateSelect(locations);
+    const el = document.getElementById('lastUpdate');
+    el.textContent = 'Updated '+new Date().toLocaleTimeString();
+    el.classList.remove('hidden');
+  } catch(e) {
+    showError('Failed to load readings: '+e.message+corsHint(e));
+  } finally {
+    document.getElementById('loadingSpinner').classList.add('hidden');
+  }
+}
+
+function normalizeArray(data) {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.data))      return data.data;
+  if (data && Array.isArray(data.locations)) return data.locations;
+  if (data && typeof data==='object')        return [data];
+  return [];
+}
+
+// ── Metric config ──────────────────────────────────────────────────────────
+const METRICS = {
+  pm02:       { label:'PM2.5',     unit:'µg/m³', color:'#f97316', thresholds:[12,35.4,55.4,150.4,250.4] },
+  pm01:       { label:'PM1.0',     unit:'µg/m³', color:'#fb923c', thresholds:[5,15,30,60,100] },
+  pm10:       { label:'PM10',      unit:'µg/m³', color:'#ef4444', thresholds:[54,154,254,354,424] },
+  rco2:       { label:'CO₂',       unit:'ppm',   color:'#4ade80', thresholds:[800,1000,1500,2000,5000] },
+  atmp:       { label:'Temp',      unit:'°C',    color:'#60a5fa', thresholds:[] },
+  rhum:       { label:'Humidity',  unit:'%',     color:'#22d3ee', thresholds:[] },
+  tvocIndex:  { label:'TVOC',      unit:'index', color:'#a78bfa', thresholds:[150,250,400,500] },
+  noxIndex:   { label:'NOx',       unit:'index', color:'#fb7185', thresholds:[20,150,400] },
+  pm003Count: { label:'Particles', unit:'/dl',   color:'#94a3b8', thresholds:[] },
+};
+
+const AQI_COLORS = ['#22c55e','#eab308','#f97316','#ef4444','#a855f7','#7f1d1d'];
+const AQI_LABELS = ['Good','Moderate','USG','Unhealthy','Very Unhealthy','Hazardous'];
+
+function aqiLevel(v, t) {
+  if (!t||!t.length) return -1;
+  for (let i=0;i<t.length;i++) if (v<=t[i]) return i;
+  return t.length;
+}
+function aqiColor(v, t) {
+  const lvl = aqiLevel(v,t);
+  return lvl<0 ? '#94a3b8' : (AQI_COLORS[lvl]||'#7f1d1d');
+}
+
+// ── Cards ──────────────────────────────────────────────────────────────────
+function renderCards(locs) {
+  const grid = document.getElementById('locationGrid');
+  if (!locs.length) {
+    grid.innerHTML='<div class="col-span-full text-center py-12 text-gray-500 text-sm">No locations found. Check your API token.</div>';
+    return;
+  }
+  grid.innerHTML = locs.map(loc => {
+    const name  = loc.locationName||loc.name||('Location '+loc.locationId);
+    const id    = loc.locationId||loc.id;
+    const ts    = loc.timestamp ? new Date(loc.timestamp).toLocaleTimeString() : '';
+    const type  = loc.locationType||'';
+    const pm25  = coerce(loc.pm02_corrected??loc.pm02??loc.pm025);
+    const pm10v = coerce(loc.pm10_corrected??loc.pm10);
+    const co2   = coerce(loc.rco2_corrected??loc.rco2);
+    const temp  = coerce(loc.atmp_corrected??loc.atmp);
+    const hum   = coerce(loc.rhum_corrected??loc.rhum);
+    const tvoc  = coerce(loc.tvocIndex??loc.tvoc);
+    const nox   = coerce(loc.noxIndex??loc.nox);
+    const pm25c = pm25!==null ? aqiColor(pm25,METRICS.pm02.thresholds) : '#94a3b8';
+    const co2c  = co2 !==null ? aqiColor(co2, METRICS.rco2.thresholds) : '#94a3b8';
+    const aqiLbl = pm25!==null ? (AQI_LABELS[aqiLevel(pm25,METRICS.pm02.thresholds)]||'Hazardous') : '';
+    const tile = (label,val,unit,color) => val!==null ? `
+      <div class="bg-gray-800/80 rounded-xl p-3">
+        <p class="text-xs text-gray-500 font-semibold mb-1">${label}</p>
+        <p class="text-xl font-extrabold leading-none" style="color:${color}">${fmt(val)}</p>
+        <p class="text-xs text-gray-600 mt-1">${unit}</p>
+      </div>` : '';
+    return `
+      <div onclick="selectLocation('${id}')" data-id="${id}"
+           class="loc-card bg-gray-900 border border-gray-800 rounded-2xl p-5 cursor-pointer">
+        <div class="flex items-start justify-between mb-4 gap-2">
+          <div class="min-w-0">
+            <h3 class="font-extrabold text-sm text-white truncate">${name}</h3>
+            <p class="text-xs text-gray-600 mt-0.5">${type?type+' · ':''}${ts}</p>
+          </div>
+          ${pm25!==null?`<span class="text-xs px-2 py-0.5 rounded-lg font-bold flex-shrink-0" style="background:${pm25c}22;color:${pm25c}">${aqiLbl}</span>`:''}
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          ${tile('PM2.5',pm25,'µg/m³',pm25c)}
+          ${tile('CO₂',co2,'ppm',co2c)}
+          ${tile('Temperature',temp,'°C','#60a5fa')}
+          ${tile('Humidity',hum,'%','#22d3ee')}
+          ${tile('PM10',pm10v,'µg/m³',aqiColor(pm10v,METRICS.pm10.thresholds))}
+          ${tile('TVOC',tvoc,'index','#a78bfa')}
+          ${tile('NOx',nox,'index','#fb7185')}
+        </div>
+        <p class="text-xs text-gray-700 mt-3 font-semibold">Click to view history →</p>
+      </div>`;
+  }).join('');
+}
+
+function coerce(v) {
+  if (v===undefined||v===null||v==='') return null;
+  const n=Number(v); return isNaN(n)?null:n;
+}
+function fmt(v) {
+  if (v===null) return '—';
+  return Number.isInteger(v) ? v : v.toFixed(1);
+}
+
+// ── Select + card click ────────────────────────────────────────────────────
+function populateSelect(locs) {
+  const sel  = document.getElementById('chartLocation');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">Select location…</option>' +
+    locs.map(l => {
+      const id   = l.locationId||l.id;
+      const name = l.locationName||l.name||('Location '+id);
+      return `<option value="${id}">${name}</option>`;
+    }).join('');
+  if (prev) sel.value = prev;
+}
+function selectLocation(id) {
+  document.getElementById('chartLocation').value = id;
+  loadChart();
+}
+
+// ── Controls ───────────────────────────────────────────────────────────────
+function setMetric(m) {
+  selectedMetric = m;
+  document.querySelectorAll('.metric-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.metric===m));
+}
+function setRange(days) {
+  selectedRange = days;
+  document.querySelectorAll('.range-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.range===String(days)));
+}
+function setViewMode(v) {
+  viewMode = v;
+  document.querySelectorAll('.view-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.view===v));
+}
+
+// ── Field lookup ───────────────────────────────────────────────────────────
+const ALT_KEYS = {
+  pm02:       ['pm02_corrected','pm02','pm025'],
+  pm01:       ['pm01_corrected','pm01','pm1'],
+  pm10:       ['pm10_corrected','pm10'],
+  rco2:       ['rco2_corrected','rco2','co2'],
+  atmp:       ['atmp_corrected','atmp','temperature'],
+  rhum:       ['rhum_corrected','rhum','humidity'],
+  tvocIndex:  ['tvocIndex','tvoc'],
+  noxIndex:   ['noxIndex','nox'],
+  pm003Count: ['pm003Count'],
+};
+function getValue(rec, key) {
+  for (const k of (ALT_KEYS[key]||[key])) {
+    if (rec[k]!==undefined && rec[k]!==null) return Number(rec[k]);
+  }
+  return null;
+}
+
+// ── Chart load ─────────────────────────────────────────────────────────────
+async function loadChart() {
+  const locationId = document.getElementById('chartLocation').value;
+  if (!locationId) { showError('Please select a location first.'); return; }
+  hideError();
+  setPlaceholder('Loading data…', true);
+  document.getElementById('chartStats').classList.add('hidden');
+  document.getElementById('corrPanel').classList.add('hidden');
+  if (chart) { chart.destroy(); chart=null; }
+
+  try {
+    const to   = new Date();
+    const from = new Date(to - selectedRange*86400_000);
+    const raw  = await api(`/locations/${locationId}/measures/past`, {
+      from: from.toISOString(), to: to.toISOString(),
+    });
+    const records = normalizeArray(raw);
+    if (!records.length) { setPlaceholder('No data for selected range.',false); return; }
+
+    currentRecords = records;
+
+    if (viewMode==='hourly')     renderHourlyChart(records);
+    else if (viewMode==='dayOverlay') renderDayOverlayChart(records);
+    else                         renderStandardChart(records);
+
+    renderCorrMatrix(records);
+  } catch(e) {
+    setPlaceholder('Error: '+e.message, false);
+    showError('Chart load failed: '+e.message+corsHint(e));
+  }
+}
+
+// ── Shared chart helpers ───────────────────────────────────────────────────
+function showStats(vals, unit) {
+  const mn  = Math.min(...vals), mx = Math.max(...vals);
+  const avg = vals.reduce((a,b)=>a+b,0)/vals.length;
+  document.getElementById('statMin').textContent   = fmt(mn)  +' '+unit;
+  document.getElementById('statMax').textContent   = fmt(mx)  +' '+unit;
+  document.getElementById('statAvg').textContent   = fmt(avg) +' '+unit;
+  document.getElementById('statCount').textContent = `${vals.length} readings`;
+  document.getElementById('chartStats').classList.remove('hidden');
+}
+
+function commonScalesPlugins(m) {
+  return {
+    scales: {
+      x: {
+        type:'time',
+        time: { tooltipFormat:'MMM d, HH:mm',
+          displayFormats:{minute:'HH:mm',hour:'MMM d HH:mm',day:'MMM d'} },
+        grid:{color:'#1f2937'},
+        ticks:{color:'#6b7280',maxRotation:0,autoSkipPadding:30,font:{family:'Nunito'}},
+      },
+      y: {
+        grid:{color:'#1f2937'},
+        ticks:{color:'#6b7280',font:{family:'Nunito'}},
+        title:{display:true,text:m.unit,color:'#6b7280',font:{size:11,family:'Nunito'}},
+      }
+    },
+    plugins: {
+      legend:{labels:{color:'#9ca3af',boxWidth:12,font:{family:'Nunito',weight:'700'}}},
+      tooltip:{
+        backgroundColor:'#111827',borderColor:'#374151',borderWidth:1,
+        titleColor:'#f9fafb',bodyColor:'#d1d5db',padding:12,
+        titleFont:{family:'Nunito',weight:'700'},bodyFont:{family:'Nunito'},
+        callbacks:{label:ctx=>` ${ctx.parsed.y.toFixed(1)} ${m.unit}`}
+      }
+    }
+  };
+}
+
+// ── Standard chart ─────────────────────────────────────────────────────────
+function renderStandardChart(records) {
+  const m = METRICS[selectedMetric]||METRICS.pm02;
+  const pts = [...records]
+    .sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp))
+    .map(r=>({x:new Date(r.timestamp),y:getValue(r,selectedMetric)}))
+    .filter(p=>p.y!==null&&!isNaN(p.y));
+  if (!pts.length) { setPlaceholder(`No ${m.label} data in selected range.`,false); return; }
+
+  showStats(pts.map(p=>p.y), m.unit);
+  document.getElementById('chartPlaceholder').classList.add('hidden');
+  const ctx = document.getElementById('historyChart').getContext('2d');
+  chart = new Chart(ctx, {
+    type:'line',
+    data:{datasets:[{
+      label:`${m.label} (${m.unit})`, data:pts,
+      borderColor:m.color, backgroundColor:m.color+'18',
+      borderWidth:2.5,
+      pointRadius:pts.length>300?0:pts.length>100?1:3,
+      pointHoverRadius:5, fill:true, tension:0.35,
+    }]},
+    options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'nearest',intersect:false,axis:'x'},
+      ...commonScalesPlugins(m)},
+  });
+}
+
+// ── Hourly smooth chart ────────────────────────────────────────────────────
+function renderHourlyChart(records) {
+  const m = METRICS[selectedMetric]||METRICS.pm02;
+
+  // Bucket by hour, average
+  const buckets = {};
+  records.forEach(r => {
+    const d   = new Date(r.timestamp);
+    const key = new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours()).getTime();
+    if (!buckets[key]) buckets[key]=[];
+    const v = getValue(r, selectedMetric);
+    if (v!==null) buckets[key].push(v);
+  });
+
+  const pts = Object.entries(buckets)
+    .map(([ts,vals])=>({
+      x: new Date(Number(ts)+30*60*1000), // midpoint of hour
+      y: vals.reduce((a,b)=>a+b,0)/vals.length,
+    }))
+    .sort((a,b)=>a.x-b.x);
+
+  if (!pts.length) { setPlaceholder(`No ${m.label} data in selected range.`,false); return; }
+
+  showStats(pts.map(p=>p.y), m.unit);
+  document.getElementById('chartPlaceholder').classList.add('hidden');
+  const ctx = document.getElementById('historyChart').getContext('2d');
+  chart = new Chart(ctx, {
+    type:'line',
+    data:{datasets:[{
+      label:`${m.label} hourly avg (${m.unit})`, data:pts,
+      borderColor:m.color, backgroundColor:m.color+'18',
+      borderWidth:2.5, pointRadius:3, pointHoverRadius:6,
+      fill:true, tension:0.5,
+    }]},
+    options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'nearest',intersect:false,axis:'x'},
+      ...commonScalesPlugins(m)},
+  });
+}
+
+// ── Day-overlay chart ──────────────────────────────────────────────────────
+function renderDayOverlayChart(records) {
+  const m = METRICS[selectedMetric]||METRICS.pm02;
+
+  // Group by local calendar day, bucket by hour
+  const days = {};
+  records.forEach(r => {
+    const d   = new Date(r.timestamp);
+    const dayKey = d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+    const hour   = d.getHours();
+    if (!days[dayKey]) days[dayKey]={};
+    if (!days[dayKey][hour]) days[dayKey][hour]=[];
+    const v = getValue(r, selectedMetric);
+    if (v!==null) days[dayKey][hour].push(v);
+  });
+
+  const sortedDays = Object.keys(days).sort((a,b)=>new Date(a)-new Date(b));
+  if (!sortedDays.length) { setPlaceholder(`No ${m.label} data in selected range.`,false); return; }
+
+  // Map hour → fake reference date (Jan 2 2000) so time axis shows 00:00–23:59
+  const REF = new Date(2000,0,2);
+  const datasets = sortedDays.map((dayKey,i) => {
+    const color = DAY_PALETTE[i%DAY_PALETTE.length];
+    const data  = Object.entries(days[dayKey])
+      .map(([h,vals])=>({
+        x: new Date(REF.getFullYear(),REF.getMonth(),REF.getDate(),Number(h),30,0),
+        y: vals.reduce((a,b)=>a+b,0)/vals.length,
+      }))
+      .sort((a,b)=>a.x-b.x);
+    return { label:dayKey, data, borderColor:color, backgroundColor:'transparent',
+      borderWidth:2, pointRadius:3, pointHoverRadius:6, fill:false, tension:0.4 };
+  });
+
+  const allVals = datasets.flatMap(ds=>ds.data.map(p=>p.y));
+  showStats(allVals, m.unit);
+  document.getElementById('chartPlaceholder').classList.add('hidden');
+
+  const ctx = document.getElementById('historyChart').getContext('2d');
+  chart = new Chart(ctx, {
+    type:'line', data:{datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      scales:{
+        x:{
+          type:'time',
+          min:new Date(REF.getFullYear(),REF.getMonth(),REF.getDate(),0,0,0),
+          max:new Date(REF.getFullYear(),REF.getMonth(),REF.getDate(),23,59,0),
+          time:{unit:'hour',tooltipFormat:'HH:mm',displayFormats:{hour:'HH:mm'}},
+          grid:{color:'#1f2937'},
+          ticks:{color:'#6b7280',maxRotation:0,font:{family:'Nunito'}},
+          title:{display:true,text:'Hour of day',color:'#6b7280',font:{size:11,family:'Nunito'}},
+        },
+        y:{
+          grid:{color:'#1f2937'},
+          ticks:{color:'#6b7280',font:{family:'Nunito'}},
+          title:{display:true,text:m.unit,color:'#6b7280',font:{size:11,family:'Nunito'}},
+        }
+      },
+      plugins:{
+        legend:{labels:{color:'#9ca3af',boxWidth:12,font:{family:'Nunito',weight:'700'},padding:8}},
+        tooltip:{
+          backgroundColor:'#111827',borderColor:'#374151',borderWidth:1,
+          titleColor:'#f9fafb',bodyColor:'#d1d5db',padding:12,
+          titleFont:{family:'Nunito',weight:'700'},bodyFont:{family:'Nunito'},
+          callbacks:{
+            title:items=>{
+              const h=new Date(items[0].parsed.x).getHours();
+              return `${String(h).padStart(2,'0')}:00–${String(h+1).padStart(2,'0')}:00`;
+            },
+            label:ctx=>` ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} ${m.unit}`,
+          }
+        }
+      }
+    },
+  });
+}
+
+// ── Correlation matrix ─────────────────────────────────────────────────────
+const CORR_METRICS = [
+  {key:'pm003Count', short:'Part.',  label:'Particles'},
+  {key:'rco2',       short:'CO₂',   label:'CO₂'},
+  {key:'atmp',       short:'Temp',  label:'Temperature'},
+  {key:'tvocIndex',  short:'TVOC',  label:'TVOC Index'},
+  {key:'noxIndex',   short:'NOx',   label:'NOx Index'},
+];
+
+function pearsonR(records, k1, k2) {
+  const pairs = records
+    .map(r=>[getValue(r,k1),getValue(r,k2)])
+    .filter(([a,b])=>a!==null&&b!==null&&!isNaN(a)&&!isNaN(b));
+  const n = pairs.length;
+  if (n<2) return null;
+  const mA=pairs.reduce((s,[a])=>s+a,0)/n;
+  const mB=pairs.reduce((s,[,b])=>s+b,0)/n;
+  let num=0,dA=0,dB=0;
+  for (const [a,b] of pairs) {
+    const pa=a-mA, pb=b-mB;
+    num+=pa*pb; dA+=pa*pa; dB+=pb*pb;
+  }
+  const den=Math.sqrt(dA*dB);
+  return den===0 ? 0 : num/den;
+}
+
+function corrCellStyle(r) {
+  if (r===null) return {bg:'#111827',color:'#6b7280'};
+  // Interpolate: blue(-1) → neutral(0) → red(+1)
+  const BLUE=[29,78,216], NEU=[55,65,81], RED=[185,28,28];
+  const t=Math.abs(r);
+  const [r1,g1,b1]=r>=0?NEU:NEU, [r2,g2,b2]=r>=0?RED:BLUE;
+  const bg=`rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+  return {bg, color:'#fff'};
+}
+
+function renderCorrMatrix(records) {
+  // Build 5×5 matrix
+  const matrix = CORR_METRICS.map(row =>
+    CORR_METRICS.map(col =>
+      row.key===col.key ? 1.0 : pearsonR(records, row.key, col.key)
+    )
+  );
+
+  // Column headers (rotated)
+  let html = '<thead><tr><th></th>';
+  CORR_METRICS.forEach(m => {
+    html += `<th class="corr-th"><div class="corr-label">${m.short}</div></th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  // Rows
+  CORR_METRICS.forEach((rowM,i) => {
+    html += `<tr><td class="corr-row-label">${rowM.short}</td>`;
+    CORR_METRICS.forEach((colM,j) => {
+      const r   = matrix[i][j];
+      const {bg,color} = corrCellStyle(r);
+      const val = r===null ? '—' : r.toFixed(2);
+      const bold = i===j ? 'border:2px solid #4b5563;' : '';
+      html += `<td class="corr-cell" style="background:${bg};color:${color};${bold}"
+        title="${rowM.label} vs ${colM.label}: ${val}">${val}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody>';
+
+  document.getElementById('corrTable').innerHTML = html;
+  document.getElementById('corrPanel').classList.remove('hidden');
+}
+
+// ── Misc helpers ───────────────────────────────────────────────────────────
+function setPlaceholder(msg,loading) {
+  const el = document.getElementById('chartPlaceholder');
+  el.innerHTML = loading
+    ? `<div class="spinner"></div><span class="text-gray-500">${msg}</span>`
+    : `<svg class="w-12 h-12 text-gray-800" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
+          d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z"/>
+      </svg><span>${msg}</span>`;
+  el.classList.remove('hidden');
+}
+function showError(msg) {
+  const el=document.getElementById('errorBanner');
+  el.textContent=msg; el.classList.remove('hidden');
+}
+function hideError() { document.getElementById('errorBanner').classList.add('hidden'); }
+function corsHint(e) {
+  if (e.message.includes('Failed to fetch')||e.message.includes('NetworkError'))
+    return ' (Possible CORS issue — try serving via a local web server.)';
+  return '';
+}
+
+// ── Start ──────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
